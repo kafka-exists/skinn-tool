@@ -29,7 +29,10 @@ def load_pairs(path):
 
 def main():
     root = sys.argv[1]
-    pairs = load_pairs(sys.argv[2])
+    pairs_file = sys.argv[2]
+    changed_file = sys.argv[3]
+
+    pairs = load_pairs(pairs_file)
     if not pairs:
         print("No valid patches.")
         return 0
@@ -39,6 +42,7 @@ def main():
         full = os.path.join(root, rel)
         if not os.path.isfile(full):
             continue
+
         with open(full, "rb") as f:
             data = f.read()
 
@@ -54,11 +58,13 @@ def main():
             with open(full, "wb") as f:
                 f.write(data)
             total += hits
+            with open(changed_file, "a", encoding="utf-8") as cf:
+                cf.write(rel + "\n")
             print("  wrote %s" % rel)
 
     print("TOTAL HITS: %d" % total)
     if total == 0:
-        print("WARNING: nothing matched.")
+        print("WARNING: nothing matched - the names live in another file.")
     return 0
 
 
