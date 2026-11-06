@@ -4,17 +4,28 @@ set -euo pipefail
 IN="$1"
 OUT="$2"
 mkdir -p "$OUT"
+OUT="$(cd "$OUT" && pwd)"
 W=$(mktemp -d)
 
-BT=$(ls -d "$ANDROID_HOME"/build-tools/* 2>/dev/null | sort -V | tail -1)
-ZIPALIGN="$BT/zipalign"
-APKSIGNER="$BT/apksigner"
-echo "build-tools: $BT"
+SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+BT=""
+if [ -n "$SDK" ]; then
+  BT=$(ls -d "${SDK}"/build-tools/* 2>/dev/null | sort -V | tail -1 || true)
+fi
+if [ -n "$BT" ] && [ -x "$BT/zipalign" ] && [ -x "$BT/apksigner" ]; then
+  ZIPALIGN="$BT/zipalign"
+  APKSIGNER="$BT/apksigner"
+else
+  ZIPALIGN="$(command -v zipalign)"
+  APKSIGNER="$(command -v apksigner)"
+fi
+echo "zipalign:  $ZIPALIGN"
+echo "apksigner: $APKSIGNER"
 
 KEYSTORE="$W/k.jks"
 keytool -genkeypair -v -keystore "$KEYSTORE" -storepass android \
   -keypass android -alias k -keyalg RSA -keysize 2048 \
-  -validity 10000 -dname "CN=repack" >/dev/null 2>&1
+  -validity 10000 -dname "CN=repack"
 
 TARGETS=(
   "assets/bin/Data/Managed/Metadata/global-metadata.dat"
@@ -23,34 +34,35 @@ TARGETS=(
 )
 
 patch_one() {
-  local apk="$1"
-  local d="$W/$(basename "$apk").d"
+  local apk="$1" d changed_f
+  d="$W/$(basename "$apk").d"
+  changed_f="$d.changed"
+  : > "$changed_f"
   mkdir -p "$d"
 
   local have=()
   for t in "${TARGETS[@]}"; do
-    if unzip -l "$apk" "$t" >/dev/null 2>&1; then
-      have+=("$t")
-    fi
+    if unzip -l "$apk" "$t" >/dev/null 2>&1; then have+=("$t"); fi
   done
-
   if [ ${#have[@]} -eq 0 ]; then
     echo "  no patch targets in $(basename "$apk")"
     return 0
   fi
 
   ( cd "$d" && unzip -o -q "$apk" "${have[@]}" )
-
-  python3 tools/patch.py "$d" patches.txt
+  python3 tools/patch.py "$d" patches.txt "$changed_f"
 
   local changed=()
-  for t in "${have[@]}"; do
-    [ -f "$d/$t" ] && changed+=("$t")
-  done
+  while IFS= read -r line; do
+    [ -n "$line" ] && [ -f "$d/$line" ] && changed+=("$line")
+  done < "$changed_f"
+
   if [ ${#changed[@]} -eq 0 ]; then
+    echo "  nothing patched in $(basename "$apk")"
     return 0
   fi
 
+  touch "${changed[@]/#/$d/}"
   ( cd "$d" && zip -0 -q "$apk" "${changed[@]}" )
 
   "$ZIPALIGN" -P 16 -f 4 "$apk" "$apk.aligned"
@@ -59,7 +71,8 @@ patch_one() {
   "$APKSIGNER" sign --ks "$KEYSTORE" --ks-pass pass:android \
     --key-pass pass:android --out "$apk.signed" "$apk"
   mv "$apk.signed" "$apk"
-  echo "  signed $(basename "$apk")"
+
+  echo "  patched + signed $(basename "$apk")"
 }
 
 if unzip -l "$IN" 2>/dev/null | grep -q '\.apk$'; then
