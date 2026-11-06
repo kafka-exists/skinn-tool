@@ -1,0 +1,45 @@
+name: Build APK
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Get game file
+        run: |
+          mkdir -p in
+          URLS=(
+            "https://d.apkpure.com/b/XAPK/com.netease.newspike?version=latest"
+            "https://d.apkpure.net/b/XAPK/com.netease.newspike?version=latest"
+            "https://d.apkpure.com/b/APK/com.netease.newspike?version=latest"
+          )
+          ok=0
+          for u in "${URLS[@]}"; do
+            echo "try: $u"
+            if curl -fsSL -A "Mozilla/5.0" --retry 2 --max-time 1800 -o in/game.bin "$u"; then
+              if [ "$(head -c 2 in/game.bin)" = "PK" ]; then ok=1; break; fi
+            fi
+          done
+          if [ $ok -eq 0 ]; then echo "DOWNLOAD FAILED"; exit 1; fi
+          ls -lh in/
+
+      - name: Repack
+        run: bash tools/repack.sh in/game.bin dist
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: modded
+          path: dist/*
+          retention-days: 7
